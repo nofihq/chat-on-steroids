@@ -46,6 +46,7 @@ import { getConfig } from '../config.js';
 import {
   AgentError,
   IdentityLostError,
+  captureAgentOfferSnapshot,
   currentRunId,
   acknowledgeOffersForConversation,
   dormantWorkerNotice,
@@ -517,9 +518,14 @@ export async function dispatch(
     outcome: null,
     evidence: emptyEvidence()
   };
+  // Capture causal ordering before any identity wait or handler can overlap a browser revival
+  // or another call's result. Millisecond timestamps alone cannot distinguish those cases.
+  const offeredBeforeCall = parent ? undefined : captureAgentOfferSnapshot();
   try {
     const result = await trackMcpRequest(() =>
-      trackInFlight(context, () => dispatchTracked(context, name, args, transportKey, requestId, surface, run, !!parent))
+      trackInFlight(context, () =>
+        dispatchTracked(context, name, args, transportKey, requestId, surface, run, !!parent, offeredBeforeCall)
+      )
     );
     // In-process callers have no socket; resolving their outer invocation publishes it.
     if (!parent && !inboundPublication()) context.publication!.completedAt = Date.now();
@@ -552,7 +558,8 @@ async function dispatchTracked(
   requestId: string | null,
   surface: SurfaceId,
   run: () => Promise<ToolResult>,
-  nested: boolean
+  nested: boolean,
+  offeredBeforeCall?: ReturnType<typeof captureAgentOfferSnapshot>
 ): Promise<ToolResult> {
   noteTransportIdentity(transportKey);
   const markTiming = beginToolTiming();
@@ -831,7 +838,8 @@ async function dispatchTracked(
         context.caller.conversationId,
         isFinish,
         startedAt,
-        isFinish
+        isFinish,
+        offeredBeforeCall
       );
   const acknowledged = acknowledgedForConversation?.messages ?? [];
   for (const message of acknowledged) {
