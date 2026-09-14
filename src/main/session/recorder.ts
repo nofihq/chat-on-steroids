@@ -2023,13 +2023,22 @@ async function recordChatObservationsNow(
         // though an earlier message from the same exact provider branch already owns it.
         // Promote only the sole durable response owner, and only while that owner is the
         // currently open recoverable turn. Retry/regenerate conflicts therefore abstain.
-        const responseOwner = !item.turnId && item.responseId && live?.turnId && recoverableTurns.has(live.turnId)
+        const mustResolveResponseOwner = Boolean(
+          item.responseId && live?.turnId && recoverableTurns.has(live.turnId) && item.turnId !== live.turnId
+        );
+        const responseOwner = mustResolveResponseOwner && item.responseId
           ? await uniqueAssistantResponseOwner(sessionId, item.responseId)
           : null;
         const exactResponseOwner = responseOwner === live?.turnId ? responseOwner : null;
+        // A contradictory replacement page id is not evidence for either turn. Keep the
+        // message unowned unless the exact durable response branch resolves it back to the
+        // current turn; accepting the replacement could strand or close unrelated work.
+        const assistantTurnId = exactResponseOwner ?? (mustResolveResponseOwner ? null : item.turnId);
         const written = await upsertMessageEvent(sessionId, {
-          ...base,
-          ...(exactResponseOwner ? { turnId: exactResponseOwner } : {}),
+          time: item.time,
+          source: 'extension',
+          ...(assistantTurnId ? { turnId: assistantTurnId } : {}),
+          ...(agent ? { agent } : {}),
           kind: 'assistant_message',
           // Keep normal 15k–20k-token handoff-style answers inline rather than making the
           // local transcript itself look truncated while the continuation carries more.

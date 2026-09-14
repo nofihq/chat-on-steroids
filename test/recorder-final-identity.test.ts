@@ -77,8 +77,12 @@ it.each(['missing', 'replaced', 'matching', 'restart'])('closes the canonical re
   expect(await readEvents(sessionId, { kinds: ['turn_end'] })).toHaveLength(1);
 });
 
-it.each([false, true])('closes a distinct final message from its exact response owner (restart=%s)', async restart => {
-  const conversationId = `response-owner-${restart}`;
+it.each([
+  { restart: false, pageTurnId: undefined },
+  { restart: true, pageTurnId: undefined },
+  { restart: true, pageTurnId: 'replacement-page-turn' }
+])('closes a distinct final message from its exact response owner (restart=$restart, page=$pageTurnId)', async ({ restart, pageTurnId }) => {
+  const conversationId = `response-owner-${restart}-${pageTurnId ?? 'missing'}`;
   const responseId = 'response:working-branch:exchange-branch';
   const opened = await recordChatObservations(conversationId, [
     { kind: 'turn_start', time: 10, turnId: 'response-turn' },
@@ -89,7 +93,8 @@ it.each([false, true])('closes a distinct final message from its exact response 
   const recovered = await recordChatObservations(conversationId, [
     { kind: 'assistant_message', time: 20, messageId: 'separate-final',
       providerMessageId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', responseId,
-      text: 'Complete answer', state: 'final', final: true, activeNow: true }
+      text: 'Complete answer', state: 'final', final: true, activeNow: true,
+      ...(pageTurnId ? { turnId: pageTurnId } : {}) }
   ]);
   const messages = await readEvents(opened.sessionId!, { kinds: ['assistant_message'] });
   expect(messages.at(-1)).toMatchObject({ messageId: 'separate-final', turnId: 'response-turn', responseId, state: 'final' });
@@ -110,7 +115,7 @@ it('rejects a response branch already owned by two page turns', async () => {
       text: 'Current work', state: 'streaming' }
   ]);
   await recordChatObservations(conversationId, [
-    { kind: 'assistant_message', time: 30, messageId: 'ambiguous-final', responseId,
+    { kind: 'assistant_message', time: 30, turnId: 'replacement-page-turn', messageId: 'ambiguous-final', responseId,
       text: 'Ambiguous final', state: 'final', final: true, activeNow: true }
   ]);
   const messages = await readEvents(opened.sessionId!, { kinds: ['assistant_message'] });
