@@ -574,16 +574,19 @@ async function dispatchTracked(
   // mate while a swarm is active. Use the full exact-id window, not the shorter prime window:
   // the live worker failure that motivated IDENTITY_EVIDENCE_MS arrived ~8 seconds late.
   const identitySensitive = needsWorkspaceIdentity(name, args);
-  // update_plan always consumes this exact session, even outside a swarm. Resolve it
-  // before the shared blocked/superseded checks rather than guessing from selection.
+  // update_plan and session_finish always consume this exact session, even outside a swarm.
+  // Resolve them before the shared blocked/superseded checks rather than guessing from
+  // selection. A refused finish is not cheaply retryable: it can end the provider turn and
+  // strand the durable Goal hold, so give its exact request-id mate the same bounded window
+  // as spawn. The wait is event-driven and returns immediately when proof already exists.
   // Observation and its dependent input must resolve the same caller before either
   // handler runs. Recording a late identity cannot recover a discarded anonymous frame.
   const desktopContext = surface === 'desktop' && (name === 'get_window_state' ||
     (WINDOWS_COMPUTER_STATE_INPUT_METHODS as readonly string[]).includes(name));
-  if (!context.caller.conversationId && (desktopContext || name === 'exec' || name === 'update_plan' || (identitySensitive && swarmRunning())) && requestId) {
+  if (!context.caller.conversationId && (desktopContext || name === 'exec' || name === 'update_plan' || name === 'session_finish' || (identitySensitive && swarmRunning())) && requestId) {
     setCallerConversation(
       context,
-      await awaitFreshCallOrigin(name, startedAt, IDENTITY_EVIDENCE_MS, { requestId })
+      await awaitFreshCallOrigin(name, startedAt, name === 'session_finish' ? SPAWN_EVIDENCE_MS : IDENTITY_EVIDENCE_MS, { requestId })
     );
   }
   // A run that ended leaves an explicit short-lived lease tombstone for each open worker
