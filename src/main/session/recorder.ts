@@ -57,6 +57,7 @@ import {
   reopenSession,
   rewriteUnattributedToolCalls,
   setSessionOrigin,
+  uniqueAssistantResponseOwner,
   upsertMessageEvent,
   writeAsset,
   writeOverflowText
@@ -1667,6 +1668,8 @@ export interface ChatObservation {
   messageId?: string;
   /** Raw public provider message UUID, retained as evidence, never used to guess ownership. */
   providerMessageId?: string;
+  /** Exact server-authored working-turn/turn-exchange branch for this response. */
+  responseId?: string;
   turnId?: string;
   final?: boolean;
   state?: 'streaming' | 'final';
@@ -1887,6 +1890,7 @@ async function recordSupersededMessages(
           messageId: item.messageId,
           state,
           ...(item.providerMessageId ? { providerMessageId: item.providerMessageId } : {}),
+          ...(item.responseId ? { responseId: item.responseId } : {}),
           final: state === 'final'
         },
         { preferTime: item.authoredTime === true }
@@ -2014,8 +2018,18 @@ async function recordChatObservationsNow(
           uncertainTurnStartedAt !== null &&
           item.time >= uncertainTurnStartedAt;
         const goalEligible = item.goalEligible === true || recoveredGoalEligible;
+        // One response can contain several distinct public messages. After a renderer
+        // remount, the final message may arrive without the document-local turn binding even
+        // though an earlier message from the same exact provider branch already owns it.
+        // Promote only the sole durable response owner, and only while that owner is the
+        // currently open recoverable turn. Retry/regenerate conflicts therefore abstain.
+        const responseOwner = !item.turnId && item.responseId && live?.turnId && recoverableTurns.has(live.turnId)
+          ? await uniqueAssistantResponseOwner(sessionId, item.responseId)
+          : null;
+        const exactResponseOwner = responseOwner === live?.turnId ? responseOwner : null;
         const written = await upsertMessageEvent(sessionId, {
           ...base,
+          ...(exactResponseOwner ? { turnId: exactResponseOwner } : {}),
           kind: 'assistant_message',
           // Keep normal 15k–20k-token handoff-style answers inline rather than making the
           // local transcript itself look truncated while the continuation carries more.
@@ -2027,6 +2041,7 @@ async function recordChatObservationsNow(
           state,
           final: state === 'final',
           ...(item.providerMessageId ? { providerMessageId: item.providerMessageId } : {}),
+          ...(item.responseId ? { responseId: item.responseId } : {}),
           ...(goalEligible && state === 'final' ? { goalEligible: true } : {})
         }, { preferTime: item.authoredTime === true });
         const canonicalTurn = written.event.turnId;
